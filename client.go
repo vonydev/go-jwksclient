@@ -15,6 +15,7 @@ import (
 /*
 	Client is a JWKS client that fetches and caches keys from a JWKS endpoint.
 	It respects the Cache-Control and Expires headers but also allows for min and max cache limits.
+	All exported methods are safe for concurrent use.
 	For more details see Config and example/main.go
 */
 
@@ -115,15 +116,19 @@ func (c *Client) Refresher(ctx context.Context) error {
 
 // Refresh fetches the JWKS from the endpoint and updates the cache
 func (c *Client) Refresh(force bool) (refreshed bool, _err error) {
-	c.m.Lock()
-	defer c.m.Unlock()
+	c.m.RLock()
+	cacheExpiresAfter := c.cacheExpiresAfter
+	c.m.RUnlock()
 
-	if !force && !time.Now().After(c.cacheExpiresAfter) {
+	if !force && !time.Now().After(cacheExpiresAfter) {
 		// cache is still valid
 		return false, nil
 	}
 
 	ks, resp, headers, err := c.get()
+
+	c.m.Lock()
+	defer c.m.Unlock()
 
 	if err != nil && c.keysStaleSince.IsZero() {
 		// update stale keys timestamp on the first error
