@@ -3,11 +3,11 @@ package main
 import (
 	"context"
 	"flag"
-	"net/http"
 	"os"
 	"time"
 
-	"github.com/dimovnike/go-jwksclient.git"
+	"github.com/dimovnike/go-jwksclient"
+	"github.com/dimovnike/go-jwksclient/private"
 	"github.com/rs/zerolog"
 )
 
@@ -24,6 +24,8 @@ var log = zerolog.New(os.Stderr).
 
 func makeConfig() jwksclient.Config {
 	cfg := jwksclient.NewConfig()
+	p := private.Config{}
+	_ = p
 
 	const defaultURL = "https://www.googleapis.com/oauth2/v3/certs"
 
@@ -46,7 +48,7 @@ func main() {
 
 	log.Debug().Interface("config", cfg).Msg("current config")
 
-	jwksClient, err := jwksclient.New(cfg, &http.Client{})
+	jwksClient, err := jwksclient.New(cfg)
 	if err != nil {
 		panic(err)
 	}

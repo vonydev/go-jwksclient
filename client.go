@@ -19,10 +19,62 @@ import (
 	For more details see Config and example/main.go
 */
 
+type Option func(*Client)
+type RefreshCallback func(ns jwk.Set, err error)
+
+// WithContext sets the context for the client
+func WithContext(ctx context.Context) Option {
+	return func(c *Client) {
+		c.ctx = ctx
+	}
+}
+
+// WithAutoRefresh start a refresh goroutine that will refresh the JWKS in the background
+func WithAutoRefresh(interval time.Duration) Option {
+	return func(c *Client) {
+		c.autoRefreshInterval = interval
+	}
+}
+
+// WithAutoRefreshCallback sets a custom auto refresh callback, it will be called when keys change
+func WithAutoRefreshCallback(rcb RefreshCallback) Option {
+	return func(c *Client) {
+		c.rcb = rcb
+	}
+}
+
+// WithWaitGroup adds a wait group to the client, it will be done when the auto refresh stops
+func WithWaitGroup(wg *sync.WaitGroup) Option {
+	return func(c *Client) {
+		c.wg = wg
+	}
+}
+
+// WithHttpClient sets the http client to use, if not specified the default client is used
+func WithHttpClient(client *http.Client) Option {
+	return func(c *Client) {
+		c.httpClient = client
+	}
+}
+
+// WithWaitFirstFetch waits for the first fetch to complete before returning from New
+func WithWaitFirstFetch() Option {
+	return func(c *Client) {
+		c.waitFirstFetch = true
+	}
+}
+
 type Client struct {
 	config Config
 
+	ctx                 context.Context
+	waitFirstFetch      bool
+	autoRefreshInterval time.Duration
+	wg                  *sync.WaitGroup
+	rcb                 RefreshCallback
+
 	httpClient *http.Client
+	refresh    func() (bool, error)
 
 	// cached data
 	m                 sync.RWMutex
@@ -35,14 +87,52 @@ type Client struct {
 }
 
 // New creates a new JWKS client
-func New(config Config, client *http.Client) (*Client, error) {
+func New(config Config, opts ...Option) (*Client, error) {
 	if err := config.Validate(); err != nil {
 		return nil, fmt.Errorf("validating config: %w", err)
 	}
 
 	cl := &Client{
 		config:     config,
-		httpClient: client,
+		httpClient: http.DefaultClient,
+		ctx:        context.Background(),
+	}
+
+	for _, opt := range opts {
+		opt(cl)
+	}
+
+	cl.refresh = func() (bool, error) {
+		refreshed, err := cl.Refresh(false)
+		if err != nil {
+			if cl.config.ExitOnError {
+				return false, err
+			}
+
+			log.Error().Err(err).Msg("failed to refresh JWKS")
+
+			return false, nil
+		}
+
+		if refreshed {
+			log.Info().Msg("JWKS refreshed")
+		}
+
+		return refreshed, nil
+	}
+
+	if cl.waitFirstFetch {
+		if _, err := cl.refresh(); err != nil {
+			return cl, err
+		}
+	}
+
+	if cl.autoRefreshInterval > 0 {
+		if cl.wg != nil {
+			cl.wg.Add(1)
+		}
+
+		go cl.autoRefresh()
 	}
 
 	return cl, nil
@@ -79,35 +169,13 @@ func (c *Client) Refresher(ctx context.Context) error {
 	tick := time.NewTicker(1 * time.Second)
 	defer tick.Stop()
 
-	refresh := func() error {
-		refreshed, err := c.Refresh(false)
-		if err != nil {
-			if c.config.ExitOnError {
-				return err
-			}
-
-			log.Error().Err(err).Msg("failed to refresh JWKS")
-			return nil
-		}
-
-		if refreshed {
-			log.Info().Msg("JWKS refreshed")
-		}
-
-		return nil
-	}
-
-	if err := refresh(); err != nil {
-		return err
-	}
-
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
 
 		case <-tick.C:
-			if err := refresh(); err != nil {
+			if _, err := c.refresh(); err != nil {
 				return err
 			}
 		}
@@ -151,7 +219,12 @@ func (c *Client) Refresh(force bool) (refreshed bool, _err error) {
 
 // get performs a GET request and returns the raw body, headers and the JWK set
 func (c *Client) get() (jwkSet jwk.Set, responseBody []byte, headers http.Header, _err error) {
-	resp, err := c.httpClient.Get(c.config.URL)
+	req, err := http.NewRequestWithContext(c.ctx, "GET", c.config.URL, http.NoBody)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("creating request: %w", err)
+	}
+
+	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("performing request: %w", err)
 	}

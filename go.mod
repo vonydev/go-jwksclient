@@ -1,10 +1,11 @@
-module github.com/dimovnike/go-jwksclient.git
+module github.com/dimovnike/go-jwksclient
 
 go 1.18
 
 require (
 	github.com/lestrrat-go/jwx v1.2.29
 	github.com/rs/zerolog v1.33.0
+	github.com/twmb/murmur3 v1.1.8
 )
 
 require (
