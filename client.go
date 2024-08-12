@@ -122,8 +122,15 @@ func New(config Config, opts ...Option) (*Client, error) {
 	}
 
 	if cl.waitFirstFetch {
-		if _, err := cl.refresh(); err != nil {
+		if r, err := cl.refresh(); err != nil {
 			return cl, err
+		} else if r && cl.rcb != nil {
+			ks, err := cl.GetKeySet()
+			if err != nil {
+				return nil, err
+			}
+
+			cl.rcb(ks, cl.cachedError)
 		}
 	}
 
