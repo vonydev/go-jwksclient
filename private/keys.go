@@ -81,7 +81,7 @@ func (kl *Keyloader) loadKeys(dir string) (jwk.Set, error) {
 
 		keyId := f.Name
 		if strings.HasSuffix(strings.ToLower(keyId), ".priv") {
-			keyId = keyId[:len(keyId)-4]
+			keyId = keyId[:len(keyId)-5]
 		}
 
 		key.Set(jwk.KeyIDKey, keyId)
